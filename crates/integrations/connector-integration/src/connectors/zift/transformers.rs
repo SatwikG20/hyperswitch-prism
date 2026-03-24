@@ -14,13 +14,85 @@ use domain_types::{
         RefundsResponseData, RepeatPaymentData, ResponseId, SetupMandateRequestData,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{VoucherNextStepData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, VoucherData},
     router_data::{ConnectorSpecificConfig, ErrorResponse},
     router_data_v2::RouterDataV2,
 };
 
 use hyperswitch_masking::Secret;
 use serde::{Deserialize, Serialize};
+use time::PrimitiveDateTime;
+use url::Url;
+use std::str::FromStr;
+use common_utils::pii;
+
+// Voucher payment method data structures
+/// Reference number for voucher payment
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoucherReference {
+    pub reference: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub digitable_line: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub barcode: Option<Secret<String>>,
+}
+
+/// Boleto-specific voucher data
+#[derive(Debug, Clone, Serialize)]
+pub struct BoletoVoucherData {
+    pub social_security_number: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_number: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fine_percentage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interest_percentage: Option<String>,
+}
+
+/// Japanese Convenience Store voucher data
+#[derive(Debug, Clone, Serialize)]
+pub struct JCSVoucherData {
+    pub first_name: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_name: Option<Secret<String>>,
+    pub shopper_email: pii::Email,
+    pub telephone_number: Secret<String>,
+}
+
+/// Doku-style voucher data (Alfamart, Indomaret)
+#[derive(Debug, Clone, Serialize)]
+pub struct DokuVoucherData {
+    pub first_name: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_name: Option<Secret<String>>,
+    pub shopper_email: pii::Email,
+}
+
+/// Connector-specific voucher payment method types
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum ZiftVoucherMethod {
+    /// Brazilian Boleto - requires CPF/CNPJ (social_security_number)
+    #[serde(rename = "boleto")]
+    Boleto(BoletoVoucherData),
+    /// Mexican Oxxo - no additional data needed
+    #[serde(rename = "oxxo")]
+    Oxxo,
+    /// Indonesian Alfamart - requires billing data
+    #[serde(rename = "alfamart")]
+    Alfamart(DokuVoucherData),
+    /// Indonesian Indomaret - requires billing data
+    #[serde(rename = "indomaret")]
+    Indomaret(DokuVoucherData),
+    /// Japanese Convenience Stores - requires billing + phone
+    #[serde(rename = "jcs")]
+    JapaneseConvenienceStore(JCSVoucherData),
+    /// Other voucher types - return NotImplemented
+    #[serde(other)]
+    Unsupported,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1261,5 +1333,59 @@ impl<F> TryFrom<ResponseRouterData<ZiftRefundResponse, Self>>
             response,
             ..item.router_data
         })
+    }
+}
+
+impl TryFrom<&VoucherData> for ZiftVoucherMethod {
+    type Error = error_stack::Report<ConnectorError>;
+
+    fn try_from(voucher_data: &VoucherData) -> Result<Self, Self::Error> {
+        match voucher_data {
+            VoucherData::Boleto(boleto_data) => {
+                // domain_types::payment_method_data::BoletoVoucherData only has social_security_number
+                Ok(Self::Boleto(BoletoVoucherData {
+                    social_security_number: boleto_data.social_security_number.clone(),
+                    bank_number: None,
+                    due_date: None,
+                    fine_percentage: None,
+                    interest_percentage: None,
+                }))
+            }
+            VoucherData::Oxxo => Ok(Self::Oxxo),
+            // Alfamart and Indomaret use empty structs in VoucherData - billing data comes from router_data
+            VoucherData::Alfamart(_) => {
+                // Billing data (first_name, last_name, email) will be extracted in request builder
+                Ok(Self::Alfamart(DokuVoucherData {
+                    first_name: Secret::new(String::new()), // Will be populated from billing
+                    last_name: None,
+                    shopper_email: pii::Email::from_str("temp@example.com").unwrap_or_default(),
+                }))
+            }
+            VoucherData::Indomaret(_) => {
+                // Billing data (first_name, last_name, email) will be extracted in billing
+                Ok(Self::Indomaret(DokuVoucherData {
+                    first_name: Secret::new(String::new()), // Will be populated from billing
+                    last_name: None,
+                    shopper_email: pii::Email::from_str("temp@example.com").unwrap_or_default(),
+                }))
+            }
+            // Japanese Convenience Stores
+            VoucherData::SevenEleven(_) | VoucherData::Lawson(_) | VoucherData::MiniStop(_) |
+            VoucherData::FamilyMart(_) | VoucherData::Seicomart(_) | VoucherData::PayEasy(_) => {
+                // Billing data + phone will be extracted in request builder
+                Ok(Self::JapaneseConvenienceStore(JCSVoucherData {
+                    first_name: Secret::new(String::new()),
+                    last_name: None,
+                    shopper_email: pii::Email::from_str("temp@example.com").unwrap_or_default(),
+                    telephone_number: Secret::new(String::new()),
+                }))
+            }
+            // NOT IMPLEMENTED variants - return error
+            VoucherData::Efecty | VoucherData::PagoEfectivo | VoucherData::RedCompra | VoucherData::RedPagos => {
+                Err(ConnectorError::NotImplemented(
+                    crate::utils::get_unimplemented_payment_method_error_message("zift")
+                ).into())
+            }
+        }
     }
 }
