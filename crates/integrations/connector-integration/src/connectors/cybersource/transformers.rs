@@ -62,6 +62,32 @@ fn card_issuer_to_string(card_issuer: CardIssuer) -> String {
     card_type.to_string()
 }
 
+// Bank Transfer payment method data structures
+#[derive(Debug, Clone, Serialize)]
+pub struct AchTransferData {
+    pub account_number: Secret<String>,
+    pub routing_number: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SepaTransferData {
+    pub iban: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bic: Option<Secret<String>>,
+    pub account_holder: Secret<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum CybersourceBankTransferMethod {
+    #[serde(rename = "ach")]
+    Ach(AchTransferData),
+    #[serde(rename = "sepa")]
+    Sepa(SepaTransferData),
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct CybersourceConnectorMetadataObject {
     pub disable_avs: Option<bool>,
