@@ -25,8 +25,7 @@ use domain_types::{
     },
     errors::ConnectorError,
     payment_address::Address,
-    payment_method_data::{
-        self, ApplePayDecryptedData, ApplePayWalletData, CardDetailsForNetworkTransactionId,
+    payment_method_data::{BankTransferData, self, ApplePayDecryptedData, ApplePayWalletData, CardDetailsForNetworkTransactionId,
         GooglePayDecryptedData, GooglePayWalletData, NetworkTokenData, PaymentMethodData,
         PaymentMethodDataTypes, RawCardNumber, SamsungPayWalletData, WalletData,
     },
@@ -816,6 +815,8 @@ pub enum PaymentInformation<
     MandatePayment(Box<MandatePaymentInformation>),
     SamsungPay(Box<SamsungPayPaymentInformation>),
     NetworkToken(Box<NetworkTokenPaymentInformation>),
+
+    BankTransfer(Box<CybersourceBankTransferMethod>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
