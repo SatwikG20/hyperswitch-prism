@@ -15,7 +15,7 @@ use domain_types::{
     },
     errors,
     payment_method_data::{
-        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
+        BankDebitData, BankTransferData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber,
     },
     router_data::ConnectorSpecificConfig,
     router_data_v2::RouterDataV2,
