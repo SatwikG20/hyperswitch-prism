@@ -12,7 +12,7 @@ use domain_types::{
         RefundFlowData, RefundSyncData, RefundsData, RefundsResponseData, ResponseId,
     },
     errors,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes},
+    payment_method_data::{BankTransferData, PaymentMethodData, PaymentMethodDataTypes},
     router_data::{self, ConnectorAuthType, ConnectorSpecificConfig},
     router_data_v2::RouterDataV2,
 };
@@ -976,8 +976,24 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .into()),
                 }
             }
+            PaymentMethodData::BankTransfer(bank_transfer) => {
+                match bank_transfer.as_ref() {
+                    BankTransferData::AchBankTransfer { .. } => {
+                        // For bank transfers, we would need account details from the request
+                        // This is a placeholder for ACH bank transfer support
+                        Err(errors::ConnectorError::NotImplemented(
+                            "ACH Bank Transfer tokenization is not yet fully implemented".to_string(),
+                        )
+                        .into())
+                    }
+                    _ => Err(errors::ConnectorError::NotImplemented(
+                        "Only ACH Bank Transfer is supported".to_string(),
+                    )
+                    .into()),
+                }
+            }
             _ => Err(errors::ConnectorError::NotImplemented(
-                "Only card and bank debit tokenization are supported".into(),
+                "Only card, bank debit, and bank transfer tokenization are supported".into(),
             )
             .into()),
         }
