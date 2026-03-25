@@ -8,7 +8,7 @@ use domain_types::{
         ResponseId,
     },
     errors,
-    payment_method_data::{BankRedirectData, PaymentMethodData, PaymentMethodDataTypes},
+    payment_method_data::{BankRedirectData, BankTransferData, PaymentMethodData, PaymentMethodDataTypes},
     router_data::{ConnectorSpecificConfig, ErrorResponse},
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
