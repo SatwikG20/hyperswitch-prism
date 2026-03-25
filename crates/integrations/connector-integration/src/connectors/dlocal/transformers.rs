@@ -7,7 +7,7 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, VoucherData},
     router_data::ConnectorSpecificConfig,
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
@@ -46,6 +46,20 @@ pub struct ThreeDSecureReqData {
 pub enum PaymentMethodId {
     #[default]
     Card,
+    Boleto,
+    Oxxo,
+    Alfamart,
+    Indomaret,
+    SevenEleven,
+    Lawson,
+    MiniStop,
+    FamilyMart,
+    Seicomart,
+    PayEasy,
+    Efecty,
+    PagoEfectivo,
+    RedCompra,
+    RedPagos,
 }
 
 #[derive(Debug, Serialize, Default, Deserialize, Clone, Eq, PartialEq)]
@@ -54,6 +68,15 @@ pub enum PaymentMethodFlow {
     #[default]
     Direct,
     ReDirect,
+}
+
+/// Voucher-specific fields for cash/voucher payments
+#[derive(Debug, Default, Eq, PartialEq, Serialize)]
+pub struct VoucherFields {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_type: Option<String>,
 }
 
 #[derive(Default, Debug, Serialize, PartialEq)]
@@ -71,6 +94,8 @@ pub struct DlocalPaymentsRequest<
     pub three_dsecure: Option<ThreeDSecureReqData>,
     pub callback_url: Option<String>,
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voucher: Option<VoucherFields>,
 }
 
 impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize>
@@ -150,6 +175,60 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     },
                     callback_url: Some(item.router_data.request.get_router_return_url()?),
                     description: item.router_data.resource_common_data.description.clone(),
+                    voucher: None,
+                };
+                Ok(payment_request)
+            }
+            PaymentMethodData::Voucher(ref voucher_data) => {
+                let amount = utils::convert_amount(
+                    item.connector.amount_converter,
+                    item.router_data.request.minor_amount,
+                    item.router_data.request.currency,
+                )?;
+                
+                let (payment_method_id, voucher_fields) = match voucher_data {
+                    VoucherData::Boleto(_) => {
+                        (PaymentMethodId::Boleto, VoucherFields {
+                            document: Some(get_doc_from_currency(country.to_string())),
+                            document_type: Some("CPF".to_string()),
+                        })
+                    }
+                    VoucherData::Oxxo => (PaymentMethodId::Oxxo, VoucherFields::default()),
+                    VoucherData::Alfamart(_) => (PaymentMethodId::Alfamart, VoucherFields::default()),
+                    VoucherData::Indomaret(_) => (PaymentMethodId::Indomaret, VoucherFields::default()),
+                    VoucherData::SevenEleven(_) => (PaymentMethodId::SevenEleven, VoucherFields::default()),
+                    VoucherData::Lawson(_) => (PaymentMethodId::Lawson, VoucherFields::default()),
+                    VoucherData::MiniStop(_) => (PaymentMethodId::MiniStop, VoucherFields::default()),
+                    VoucherData::FamilyMart(_) => (PaymentMethodId::FamilyMart, VoucherFields::default()),
+                    VoucherData::Seicomart(_) => (PaymentMethodId::Seicomart, VoucherFields::default()),
+                    VoucherData::PayEasy(_) => (PaymentMethodId::PayEasy, VoucherFields::default()),
+                    VoucherData::Efecty => (PaymentMethodId::Efecty, VoucherFields::default()),
+                    VoucherData::PagoEfectivo => (PaymentMethodId::PagoEfectivo, VoucherFields::default()),
+                    VoucherData::RedCompra => (PaymentMethodId::RedCompra, VoucherFields::default()),
+                    VoucherData::RedPagos => (PaymentMethodId::RedPagos, VoucherFields::default()),
+                };
+                
+                let payment_request = Self {
+                    amount,
+                    currency: item.router_data.request.currency,
+                    payment_method_id,
+                    payment_method_flow: PaymentMethodFlow::ReDirect,
+                    country,
+                    payer: Payer {
+                        name,
+                        email,
+                        document: get_doc_from_currency(country.to_string()),
+                    },
+                    card: None,
+                    order_id: item
+                        .router_data
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                    three_dsecure: None,
+                    callback_url: Some(item.router_data.request.get_router_return_url()?),
+                    description: item.router_data.resource_common_data.description.clone(),
+                    voucher: Some(voucher_fields),
                 };
                 Ok(payment_request)
             }
@@ -165,7 +244,6 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             | PaymentMethodData::RealTimePayment(_)
             | PaymentMethodData::MobilePayment(_)
             | PaymentMethodData::Upi(_)
-            | PaymentMethodData::Voucher(_)
             | PaymentMethodData::GiftCard(_)
             | PaymentMethodData::OpenBanking(_)
             | PaymentMethodData::CardToken(_)
