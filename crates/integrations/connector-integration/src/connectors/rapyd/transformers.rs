@@ -6,14 +6,14 @@ use domain_types::{
         RefundFlowData, RefundsData, RefundsResponseData, ResponseId,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData},
+    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, VoucherData, WalletData},
     router_data::{ConnectorSpecificConfig, ErrorResponse},
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
 };
 use error_stack;
 use error_stack::ResultExt;
-use hyperswitch_masking::Secret;
+use hyperswitch_masking::{PeekInterface, Secret};
 use serde::Deserialize;
 use serde::Serialize;
 use std::fmt::Debug;
@@ -166,6 +166,9 @@ pub struct PaymentMethod<T: PaymentMethodDataTypes + Debug + Sync + Send + 'stat
     pub fields: Option<PaymentFields<T>>,
     pub address: Option<Address>,
     pub digital_wallet: Option<RapydWallet>,
+    /// Voucher-specific fields for cash/voucher payment methods
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub voucher_fields: Option<VoucherFields>,
 }
 
 #[derive(Default, Debug, Serialize)]
@@ -175,6 +178,25 @@ pub struct PaymentFields<T: PaymentMethodDataTypes + Debug + Sync + Send + 'stat
     pub expiration_year: Secret<String>,
     pub name: Secret<String>,
     pub cvv: Secret<String>,
+}
+
+/// Voucher-specific fields for Rapyd local payment methods
+#[derive(Default, Debug, Serialize)]
+pub struct VoucherFields {
+    /// Customer's first name
+    pub first_name: String,
+    /// Customer's last name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_name: Option<String>,
+    /// Customer's email address
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<common_utils::pii::Email>,
+    /// Customer's phone number
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phone_number: Option<String>,
+    /// Document/tax ID (e.g., CPF for Brazil Boleto, CURP for Mexico Oxxo)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_id: Option<Secret<String>>,
 }
 
 #[derive(Default, Debug, Serialize)]
@@ -263,6 +285,7 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                     }),
                     address: None,
                     digital_wallet: None,
+                    voucher_fields: None,
                 })
             }
             PaymentMethodData::Wallet(ref wallet_data) => {
@@ -297,6 +320,50 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                     fields: None,
                     address: None,
                     digital_wallet,
+                    voucher_fields: None,
+                })
+            }
+            PaymentMethodData::Voucher(ref voucher_data) => {
+                let pm_type = match voucher_data {
+                    VoucherData::Boleto(_) => "br_boleto",
+                    VoucherData::Oxxo => "mx_oxxo",
+                    VoucherData::Alfamart(_) => "id_alfamart",
+                    VoucherData::Indomaret(_) => "id_indomaret",
+                    VoucherData::SevenEleven(_) => "jp_seven_eleven",
+                    VoucherData::Lawson(_) => "jp_lawson",
+                    VoucherData::MiniStop(_) => "jp_ministop",
+                    VoucherData::FamilyMart(_) => "jp_familymart",
+                    VoucherData::Seicomart(_) => "jp_seicomart",
+                    VoucherData::PayEasy(_) => "jp_payeasy",
+                    VoucherData::Efecty => "co_efecty",
+                    VoucherData::PagoEfectivo => "pe_pagoefectivo",
+                    VoucherData::RedCompra => "co_redcompra",
+                    VoucherData::RedPagos => "co_redpagos",
+                };
+                
+                // Extract customer info from billing address for voucher fields
+                let voucher_fields = VoucherFields {
+                    first_name: item.router_data.resource_common_data.get_billing_first_name()
+                        .change_context(ConnectorError::MissingRequiredField { field_name: "billing.first_name" })?
+                        .peek()
+                        .to_string(),
+                    last_name: item.router_data.resource_common_data.get_optional_billing_last_name()
+                        .map(|s| s.peek().to_string()),
+                    email: item.router_data.resource_common_data.get_optional_billing_email(),
+                    phone_number: item.router_data.resource_common_data.get_optional_billing_phone_number()
+                        .map(|p| p.peek().to_string()),
+                    document_id: match voucher_data {
+                        VoucherData::Boleto(boleto_data) => boleto_data.social_security_number.clone(),
+                        _ => None,
+                    },
+                };
+                
+                Some(PaymentMethod {
+                    pm_type: pm_type.to_string(),
+                    fields: None,
+                    address: None,
+                    digital_wallet: None,
+                    voucher_fields: Some(voucher_fields),
                 })
             }
             _ => None,

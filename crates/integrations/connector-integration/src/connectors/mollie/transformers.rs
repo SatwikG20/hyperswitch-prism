@@ -98,6 +98,18 @@ pub struct MolliePaymentsRequest {
 pub enum MolliePaymentMethodData {
     #[serde(rename = "creditcard")]
     CreditCard(Box<CreditCardMethodData>),
+    #[serde(rename = "banktransfer")]
+    BankTransfer(Box<BankTransferMethodData>),
+}
+
+// Bank Transfer Method Data
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BankTransferMethodData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing_email: Option<Email>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub billing_address: Option<MollieAddress>,
 }
 
 // Credit Card Method Data
@@ -209,6 +221,38 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     card_token,
                     billing_address,
                     shipping_address: None,
+                }))
+            }
+            PaymentMethodData::BankTransfer(_bank_transfer_data) => {
+                // Bank transfer payments don't require tokenization
+                // Match Hyperswitch implementation: billingEmail and billingAddress are optional
+                let billing_email = item.request.email.clone();
+
+                // Extract billing address if available (optional for bank transfer)
+                let billing_address = item
+                    .resource_common_data
+                    .address
+                    .get_payment_method_billing()
+                    .and_then(|billing| {
+                        let address = billing.address.as_ref()?;
+                        let line1 = address.line1.as_ref()?.peek().to_string();
+                        let street_and_number = match address.line2.as_ref() {
+                            Some(line2) => format!("{},{}", line1, line2.peek().as_str()),
+                            None => line1,
+                        };
+
+                        Some(MollieAddress {
+                            street_and_number: Secret::new(street_and_number),
+                            postal_code: Secret::new(address.zip.as_ref()?.peek().to_string()),
+                            city: address.city.as_ref()?.peek().to_string(),
+                            region: None, // Match Hyperswitch: always null
+                            country: address.country?,
+                        })
+                    });
+
+                MolliePaymentMethodData::BankTransfer(Box::new(BankTransferMethodData {
+                    billing_email,
+                    billing_address,
                 }))
             }
             _ => {
