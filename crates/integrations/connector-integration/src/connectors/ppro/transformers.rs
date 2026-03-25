@@ -14,7 +14,7 @@ use domain_types::{
     },
     errors,
     mandates::MandateDataType,
-    payment_method_data::PaymentMethodDataTypes,
+    payment_method_data::{PaymentMethodDataTypes, VoucherData},
     router_data::ErrorResponse,
     router_data_v2::RouterDataV2,
 };
