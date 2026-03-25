@@ -12,7 +12,7 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors,
-    payment_method_data::PaymentMethodDataTypes,
+    payment_method_data::{BankTransferData, PaymentMethodDataTypes},
     router_data::ConnectorSpecificConfig,
     router_data_v2::RouterDataV2,
     router_response_types::RedirectForm,
@@ -86,6 +86,7 @@ pub struct AirwallexPaymentRequest {
 pub enum AirwallexPaymentMethod {
     Card(AirwallexCardData),
     BankRedirect(AirwallexBankRedirectData),
+    BankTransfer(AirwallexBankTransferData),
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +95,25 @@ pub enum AirwallexBankRedirectData {
     Ideal(AirwallexIdealData),
     Trustly(AirwallexTrustlyData),
     Blik(AirwallexBlikData),
+}
+
+// Bank Transfer data structures
+#[derive(Debug, Serialize)]
+pub struct AirwallexBankTransferData {
+    pub bank_transfer: AirwallexBankTransferDetails,
+    #[serde(rename = "type")]
+    pub payment_method_type: AirwallexPaymentType,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AirwallexBankTransferDetails {
+    pub account_number: Secret<String>,
+    pub bank_code: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_name: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_name: Option<String>,
+    pub country_code: common_enums::CountryAlpha2,
 }
 
 // Removed old AirwallexPaymentMethodData enum - now using individual Option fields for cleaner serialization
@@ -370,6 +390,71 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                     .into())
                 }
             },
+            domain_types::payment_method_data::PaymentMethodData::BankTransfer(
+                bank_transfer_data,
+            ) => {
+                // Handle bank transfer payment method
+                // Extract bank transfer details from connector_feature_data
+                let connector_feature_data = item
+                    .router_data
+                    .request
+                    .connector_feature_data
+                    .as_ref()
+                    .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                        field_name: "connector_feature_data",
+                    })?;
+
+                let metadata_json: serde_json::Value = serde_json::to_value(connector_feature_data)
+                    .map_err(|_| errors::ConnectorError::RequestEncodingFailed)?;
+
+                let account_number = metadata_json
+                    .get("account_number")
+                    .and_then(|v| v.as_str())
+                    .map(|s| Secret::new(s.to_string()))
+                    .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                        field_name: "connector_feature_data.account_number",
+                    })?;
+
+                let bank_code = metadata_json
+                    .get("bank_code")
+                    .and_then(|v| v.as_str())
+                    .map(|s| Secret::new(s.to_string()))
+                    .ok_or_else(|| errors::ConnectorError::MissingRequiredField {
+                        field_name: "connector_feature_data.bank_code",
+                    })?;
+
+                let account_name = metadata_json
+                    .get("account_name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| Secret::new(s.to_string()));
+
+                let bank_name = metadata_json
+                    .get("bank_name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                let country_code = metadata_json
+                    .get("country_code")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<common_enums::CountryAlpha2>().ok())
+                    .unwrap_or(
+                        item.router_data
+                            .resource_common_data
+                            .get_billing_country()
+                            .unwrap_or(common_enums::CountryAlpha2::US),
+                    );
+
+                AirwallexPaymentMethod::BankTransfer(AirwallexBankTransferData {
+                    bank_transfer: AirwallexBankTransferDetails {
+                        account_number,
+                        bank_code,
+                        account_name,
+                        bank_name,
+                        country_code,
+                    },
+                    payment_method_type: AirwallexPaymentType::BankTransfer,
+                })
+            }
             _ => {
                 return Err(errors::ConnectorError::NotSupported {
                     message: "Payment Method".to_string(),
