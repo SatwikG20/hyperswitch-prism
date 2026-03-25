@@ -11,7 +11,7 @@ use domain_types::{
         RefundsResponseData, ResponseId,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes},
+    payment_method_data::{BankTransferData, PaymentMethodData, PaymentMethodDataTypes},
     router_data::ConnectorSpecificConfig,
     router_data_v2::RouterDataV2,
 };
@@ -162,6 +162,7 @@ pub struct TrustpaymentsAuthRequest {
 #[serde(untagged)]
 pub enum TrustpaymentsPaymentMethod {
     Card(TrustpaymentsCardData),
+    BankTransfer(TrustpaymentsBankTransferData),
 }
 
 #[derive(Debug, Serialize)]
@@ -169,6 +170,20 @@ pub struct TrustpaymentsCardData {
     pub pan: Secret<String>,
     pub expirydate: Secret<String>,
     pub securitycode: Secret<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrustpaymentsBankTransferData {
+    #[serde(rename = "paymenttypedescription")]
+    pub payment_type: String,
+    #[serde(rename = "bankaccountnumber")]
+    pub account_number: Secret<String>,
+    #[serde(rename = "bankcode")]
+    pub bank_code: Secret<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "bankaccountiban")]
+    pub iban: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "bankaccountbic")]
+    pub bic: Option<Secret<String>>,
 }
 
 // ===== AUTHORIZE RESPONSE =====
@@ -245,6 +260,63 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                     pan: Secret::new(card_number_string),
                     expirydate: expiry_date,
                     securitycode: card_data.card_cvc.clone(),
+                })
+            }
+            PaymentMethodData::BankTransfer(_bank_transfer_data) => {
+                // Handle bank transfer payment method
+                // Extract bank transfer details from connector feature data
+                // This is how Trustpayments expects bank transfer data to be provided
+                let connector_feature_data = router_data
+                    .request
+                    .connector_feature_data
+                    .as_ref()
+                    .ok_or_else(|| ConnectorError::MissingRequiredField {
+                        field_name: "connector_feature_data",
+                    })?;
+                
+                // Parse the feature data to extract bank transfer fields
+                let metadata_json: serde_json::Value = serde_json::to_value(connector_feature_data)
+                    .map_err(|_| ConnectorError::RequestEncodingFailed)?;
+                
+                let account_number = metadata_json
+                    .get("account_number")
+                    .and_then(|v| v.as_str())
+                    .map(|s| Secret::new(s.to_string()))
+                    .ok_or_else(|| ConnectorError::MissingRequiredField {
+                        field_name: "connector_metadata.account_number",
+                    })?;
+                
+                let bank_code = metadata_json
+                    .get("bank_code")
+                    .and_then(|v| v.as_str())
+                    .map(|s| Secret::new(s.to_string()))
+                    .ok_or_else(|| ConnectorError::MissingRequiredField {
+                        field_name: "connector_metadata.bank_code",
+                    })?;
+                
+                let iban = metadata_json
+                    .get("iban")
+                    .and_then(|v| v.as_str())
+                    .map(|s| Secret::new(s.to_string()));
+                
+                let bic = metadata_json
+                    .get("bic")
+                    .and_then(|v| v.as_str())
+                    .map(|s| Secret::new(s.to_string()));
+                
+                // Determine payment type based on available fields
+                let payment_type = if iban.is_some() {
+                    "SEPA".to_string()
+                } else {
+                    "ACH".to_string()
+                };
+                
+                TrustpaymentsPaymentMethod::BankTransfer(TrustpaymentsBankTransferData {
+                    payment_type,
+                    account_number,
+                    bank_code,
+                    iban,
+                    bic,
                 })
             }
             _ => {
