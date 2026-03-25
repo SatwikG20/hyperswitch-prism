@@ -14,7 +14,7 @@ use domain_types::{
     },
     errors::ConnectorError,
     payment_method_data::{
-        BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData,
+        BankDebitData, BankTransferData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber, WalletData,
     },
     router_data::{
         AdditionalPaymentMethodConnectorResponse, ConnectorResponseData, ConnectorSpecificConfig,
@@ -143,6 +143,15 @@ pub struct CheckoutRawCardDetails {
 }
 
 #[derive(Debug, Serialize)]
+pub struct BankTransferSource {
+    #[serde(rename = "type")]
+    pub source_type: String,
+    pub payment_type: String,
+    pub billing_address: Option<CheckoutAddress>,
+    pub account_holder: Option<CheckoutAccountHolderDetails>,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum PaymentSource<
     T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
@@ -154,6 +163,7 @@ pub enum PaymentSource<
     MandatePayment(MandateSource),
     GooglePayPredecrypt(Box<GooglePayPredecrypt>),
     AchBankDebit(AchBankDebitSource),
+    BankTransfer(BankTransferSource),
 }
 
 #[derive(Debug, Serialize)]
