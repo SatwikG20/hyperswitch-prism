@@ -9,7 +9,7 @@ use domain_types::{
         ResponseId,
     },
     errors,
-    payment_method_data::{BankDebitData, PaymentMethodData, PaymentMethodDataTypes},
+    payment_method_data::{BankTransferData, BankDebitData, PaymentMethodData, PaymentMethodDataTypes},
     router_data::ConnectorSpecificConfig,
     router_data_v2::RouterDataV2,
 };
@@ -112,6 +112,25 @@ fn map_ecp_account_type(
 }
 
 // Auth Type
+
+// Bank Transfer payment method data structures
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BluesnapBankTransferData {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bank_transfer_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_number: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub routing_number: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iban: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bic: Option<Secret<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_holder: Option<Secret<String>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct BluesnapAuthType {
     pub username: Secret<String>,
