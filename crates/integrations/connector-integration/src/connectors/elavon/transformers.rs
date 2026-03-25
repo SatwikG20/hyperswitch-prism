@@ -255,8 +255,25 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
                 tracing::debug!(?card_req, "Elavon Card Payment Request");
                 Ok(Self::Card(card_req))
             }
+            PaymentMethodData::BankTransfer(bank_transfer) => {
+                // For bank transfers, we would need to handle ACH or other bank transfer types
+                // This is a placeholder for future bank transfer implementation
+                match *bank_transfer {
+                    BankTransferData::AchBankTransfer { .. } => {
+                        // Bank transfer would require different transaction types
+                        // e.g., ssl_transaction_type: TransactionType::AchSale or similar
+                        Err(report!(errors::ConnectorError::NotImplemented(
+                            "ACH bank transfer is not yet implemented for Elavon".to_string()
+                        )))
+                    }
+                    _ => Err(report!(errors::ConnectorError::NotSupported {
+                        message: "Only ACH bank transfers are supported".to_string(),
+                        connector: "Elavon",
+                    })),
+                }
+            }
             _ => Err(report!(errors::ConnectorError::NotImplemented(
-                "Only card payments are supported for Elavon".to_string()
+                "Only card and ACH bank transfer payments are supported for Elavon".to_string()
             ))),
         }
     }
