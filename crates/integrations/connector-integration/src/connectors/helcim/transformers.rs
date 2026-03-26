@@ -7,7 +7,7 @@ use domain_types::{
         RefundSyncData, RefundsData, RefundsResponseData, ResponseId, SetupMandateRequestData,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
     router_data::ConnectorSpecificConfig,
     router_data_v2::RouterDataV2,
     router_request_types::SyncRequestType,
@@ -52,8 +52,17 @@ impl TryFrom<&ConnectorSpecificConfig> for HelcimAuthType {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum HelcimPaymentsRequest<
+    T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
+> {
+    Card(HelcimCardPaymentRequest<T>),
+    Ach(HelcimAchPaymentRequest),
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HelcimPaymentsRequest<
+pub struct HelcimCardPaymentRequest<
     T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Serialize,
 > {
     amount: FloatMajorUnit,
@@ -64,6 +73,36 @@ pub struct HelcimPaymentsRequest<
     billing_address: HelcimBillingAddress,
     #[serde(skip_serializing_if = "Option::is_none")]
     ecommerce: Option<bool>,
+}
+
+// ACH Payment Request
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HelcimAchPaymentRequest {
+    amount: FloatMajorUnit,
+    currency: common_enums::Currency,
+    ip_address: Secret<String, pii::IpAddress>,
+    bank_account: HelcimBankAccount,
+    invoice: HelcimInvoice,
+    billing_address: HelcimBillingAddress,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ecommerce: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HelcimBankAccount {
+    account_number: Secret<String>,
+    routing_number: Secret<String>,
+    account_type: HelcimAccountType,
+    sec_code: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HelcimAccountType {
+    Checking,
+    Savings,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,16 +170,6 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
             T,
         >,
     ) -> Result<Self, Self::Error> {
-        let card_data = match &item.router_data.request.payment_method_data {
-            PaymentMethodData::Card(card) => HelcimCard {
-                card_expiry: card
-                    .get_card_expiry_month_year_2_digit_with_delimiter("".to_string())?,
-                card_number: card.card_number.clone(),
-                card_c_v_v: card.card_cvc.clone(),
-            },
-            _ => return Err(ConnectorError::NotImplemented("payment method".into()).into()),
-        };
-
         let req_address = item
             .router_data
             .resource_common_data
@@ -189,15 +218,60 @@ impl<T: PaymentMethodDataTypes + std::fmt::Debug + Sync + Send + 'static + Seria
 
         let currency = check_currency(item.router_data.request.currency)?;
 
-        Ok(Self {
-            amount,
-            currency,
-            ip_address,
-            card_data,
-            invoice,
-            billing_address,
-            ecommerce: None,
-        })
+        match &item.router_data.request.payment_method_data {
+            PaymentMethodData::Card(card) => {
+                let card_data = HelcimCard {
+                    card_expiry: card
+                        .get_card_expiry_month_year_2_digit_with_delimiter("".to_string())?,
+                    card_number: card.card_number.clone(),
+                    card_c_v_v: card.card_cvc.clone(),
+                };
+
+                Ok(Self::Card(HelcimCardPaymentRequest {
+                    amount,
+                    currency,
+                    ip_address,
+                    card_data,
+                    invoice,
+                    billing_address,
+                    ecommerce: None,
+                }))
+            }
+            PaymentMethodData::BankDebit(BankDebitData::AchBankDebit {
+                account_number,
+                routing_number,
+                bank_type,
+                ..
+            }) => {
+                let account_type = match bank_type {
+                    Some(common_enums::BankType::Savings) => HelcimAccountType::Savings,
+                    _ => HelcimAccountType::Checking,
+                };
+
+                let bank_account = HelcimBankAccount {
+                    account_number: account_number.clone(),
+                    routing_number: routing_number.clone(),
+                    account_type,
+                    sec_code: "WEB".to_string(),
+                };
+
+                Ok(Self::Ach(HelcimAchPaymentRequest {
+                    amount,
+                    currency,
+                    ip_address,
+                    bank_account,
+                    invoice,
+                    billing_address,
+                    ecommerce: None,
+                }))
+            }
+            PaymentMethodData::BankDebit(_) => Err(ConnectorError::NotSupported {
+                message: "Only ACH bank debit is supported".to_string(),
+                connector: "Helcim",
+            }
+            .into()),
+            _ => Err(ConnectorError::NotImplemented("payment method".into()).into()),
+        }
     }
 }
 
