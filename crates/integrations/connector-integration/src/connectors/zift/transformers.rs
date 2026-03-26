@@ -14,7 +14,7 @@ use domain_types::{
         RefundsResponseData, RepeatPaymentData, ResponseId, SetupMandateRequestData,
     },
     errors::ConnectorError,
-    payment_method_data::{PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
+    payment_method_data::{BankDebitData, PaymentMethodData, PaymentMethodDataTypes, RawCardNumber},
     router_data::{ConnectorSpecificConfig, ErrorResponse},
     router_data_v2::RouterDataV2,
 };
@@ -88,6 +88,7 @@ pub enum HolderType {
 #[serde(untagged)]
 pub enum ZiftPaymentsRequest<T: PaymentMethodDataTypes + Serialize + Debug> {
     Card(ZiftCardPaymentRequest<T>),
+    Ach(ZiftAchPaymentRequest),
     Mandate(ZiftMandatePaymentRequest),
     ExternalThreeDs(ZiftExternalThreeDsPaymentRequest<T>),
 }
@@ -116,7 +117,32 @@ pub struct ZiftCardPaymentRequest<T: PaymentMethodDataTypes + Serialize + Debug>
     holder_name: Secret<String>,
     holder_type: HolderType,
     amount: StringMinorUnit,
-    //Billing address fields are intentionally not passed to Zift.As confirmed by the Zift connector team, billing-related parameters must not be sent in payment or mandate requests. Passing billing address details was causing transaction failures in production. To ensure successful processing and alignment with Zift’s API expectations, all billing address fields have been removed.
+    //Billing address fields are intentionally not passed to Zift.As confirmed by the Zift connector team, billing-related parameters must not be sent in payment or mandate requests. Passing billing address details was causing transaction failures in production. To ensure successful processing and alignment with Zift's API expectations, all billing address fields have been removed.
+}
+
+// ACH (Bank Transfer) payment request
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZiftAchPaymentRequest {
+    request_type: RequestType,
+    #[serde(flatten)]
+    auth: ZiftAuthType,
+    /// Account type: C=Checking, S=Savings
+    account_type: AccountType,
+    /// Bank routing number (9 digits)
+    routing_number: Secret<String>,
+    /// Bank account number
+    account_number: Secret<String>,
+    transaction_code: String,
+    transaction_industry_type: TransactionIndustryType,
+    transaction_category_code: TransactionCategoryCode,
+    /// Account holder name
+    holder_name: Secret<String>,
+    holder_type: HolderType,
+    amount: StringMinorUnit,
+    /// SEC code for ACH transactions (PPD, WEB, TEL, CCD)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sec_code: Option<String>,
 }
 // Mandate payment (MIT - Merchant Initiated)
 #[derive(Debug, Serialize)]
@@ -520,6 +546,65 @@ impl<T: PaymentMethodDataTypes + Debug + Sync + Send + 'static + Serialize>
                     }
                 }
             }
+            PaymentMethodData::BankDebit(BankDebitData::AchBankDebit {
+                account_number,
+                routing_number,
+                bank_account_holder_name,
+                bank_holder_type,
+                bank_type,
+                ..
+            }) => {
+                // Map bank type to Zift account type
+                let account_type = match bank_type {
+                    Some(common_enums::BankType::Savings) => AccountType::Savings,
+                    _ => AccountType::Checking, // Default to Checking
+                };
+
+                // Get account holder name with fallback to billing name
+                let holder_name = bank_account_holder_name
+                    .or_else(|| {
+                        item.router_data
+                            .resource_common_data
+                            .get_billing_full_name()
+                            .ok()
+                    })
+                    .ok_or_else(|| {
+                        error_stack::report!(ConnectorError::MissingRequiredField {
+                            field_name: "bank_account_holder_name",
+                        })
+                    })?;
+
+                // ACH transactions are always "Sale" type (no auth/capture for ACH)
+                let ach_request = ZiftAchPaymentRequest {
+                    request_type: RequestType::Sale,
+                    auth,
+                    account_type,
+                    routing_number: routing_number.clone(),
+                    account_number: account_number.clone(),
+                    transaction_code: item
+                        .router_data
+                        .resource_common_data
+                        .connector_request_reference_id
+                        .clone(),
+                    transaction_industry_type: TransactionIndustryType::Ecommerce,
+                    transaction_category_code: TransactionCategoryCode::Ecommerce,
+                    holder_name,
+                    holder_type: bank_holder_type
+                        .map(|ht| match ht {
+                            common_enums::BankHolderType::Business => HolderType::Organizational,
+                            common_enums::BankHolderType::Personal => HolderType::Personal,
+                        })
+                        .unwrap_or(HolderType::Personal),
+                    amount,
+                    sec_code: Some("WEB".to_string()), // Default to WEB for online transactions
+                };
+                Ok(Self::Ach(ach_request))
+            }
+            PaymentMethodData::BankDebit(_) => Err(ConnectorError::NotSupported {
+                message: "Only ACH bank debit is supported".to_string(),
+                connector: "Zift",
+            }
+            .into()),
             _ => Err(error_stack::report!(ConnectorError::NotImplemented(
                 "Payment method".to_string()
             ),)),
